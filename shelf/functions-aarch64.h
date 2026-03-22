@@ -18,12 +18,6 @@ static void *sys_memcpy(void *dest, const void *src, size_t n) {
     return dest;
 }
 
-static size_t sys_strlen(const char *s) {
-    size_t i = 0;
-    while (s && s[i]) i++;
-    return i;
-}
-
 static inline void *sys_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset) {
     register long x0 __asm__("x0") = (long)addr;
     register long x1 __asm__("x1") = length;
@@ -57,37 +51,6 @@ static inline int sys_mprotect(void *addr, unsigned long length, int prot) {
             : "r" (x1), "r" (x2), "r" (x8)
             : "memory", "cc"
     );
-    return (int)x0;
-}
-
-static inline long sys_getrandom(void *buf, size_t len, unsigned int flags) {
-    register long x0 __asm__("x0") = (long)buf;
-    register long x1 __asm__("x1") = len;
-    register long x2 __asm__("x2") = flags;
-    register long x8 __asm__("x8") = 278;
-
-    __asm__ volatile (
-        "svc #0"
-        : "+r"(x0)
-        : "r"(x1), "r"(x2), "r"(x8)
-        : "memory", "cc"
-    );
-
-    return x0;
-}
-
-static inline int sys_munmap(void *addr, size_t length) {
-    register long x0 __asm__("x0") = (long)addr;
-    register long x1 __asm__("x1") = length;
-    register long x8 __asm__("x8") = 215;
-
-    __asm__ volatile (
-        "svc #0"
-        : "+r"(x0)
-        : "r"(x1), "r"(x8)
-        : "memory", "cc"
-    );
-
     return (int)x0;
 }
 

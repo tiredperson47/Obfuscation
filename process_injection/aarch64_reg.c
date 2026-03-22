@@ -11,7 +11,7 @@
 #include <linux/elf.h>
 #include <stdint.h>
 #include "agent.h"
-#define PID 0
+#define PID 140011
 #define CHECK(x) if ((x) == -1) { perror(#x); exit(1); }
 #define NT_ARM_TLS 0x401 // Ptrace flag for AArch64 TLS register
 
@@ -66,7 +66,7 @@ int main() {
     // mmap
     regs.regs[0] = 0;                      
     regs.regs[1] = agent_len;              
-    regs.regs[2] = PROT_READ | PROT_WRITE | PROT_EXEC;
+    regs.regs[2] = PROT_READ | PROT_EXEC;
     regs.regs[3] = MAP_PRIVATE | MAP_ANONYMOUS;
     regs.regs[4] = -1;                     
     regs.regs[5] = 0;                      

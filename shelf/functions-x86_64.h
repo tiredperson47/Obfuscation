@@ -18,22 +18,16 @@ static void *sys_memcpy(void *dest, const void *src, size_t n) {
     return dest;
 }
 
-static size_t sys_strlen(const char *s) {
-    size_t i = 0;
-    while (s && s[i]) i++;
-    return i;
-}
-
 static inline void *sys_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset) {
     long ret;
-    register long x10 __asm__("x10") = flags;
-    register long x8 __asm__("x8") = fd;
-    register long x9 __asm__("x9") = offset;
+    register long r10 __asm__("r10") = flags;
+    register long r8 __asm__("r8") = fd;
+    register long r9 __asm__("r9") = offset;
 
     __asm__ volatile (
         "syscall"
         : "=a" (ret)
-        : "a" (9), "D" (addr), "S" (length), "d" (x4), "r" (x10), "r" (x8), "r" (x9)
+        : "a" (9), "D" (addr), "S" (length), "d" (prot), "r" (r10), "r" (r8), "r" (r9)
         : "rcx", "r11", "memory"
     );
 
@@ -43,7 +37,7 @@ static inline void *sys_mmap(void *addr, size_t length, int prot, int flags, int
     return (void *)ret;
 }
 
-static inline void *sys_mprotect(void *addr, unsigned long length, int prot) {
+static inline int sys_mprotect(void *addr, unsigned long length, int prot) {
 		long ret;
 		__asm__ volatile (
 				"syscall"
@@ -52,33 +46,6 @@ static inline void *sys_mprotect(void *addr, unsigned long length, int prot) {
 				: "rcx", "r11", "memory"
 		);
 		return (ret < 0) ? -1 : 0;
-}
-
-static inline long sys_getrandom(void *buf, size_t len, unsigned int flags) {
-    long ret;
-    register long x10 __asm__("x10") = flags;
-
-    __asm__ volatile (
-        "syscall"
-        : "=a"(ret)
-        : "a"(318), "D"(buf), "S"(len), "d"(x10)
-        : "rcx", "r11", "memory"
-    );
-
-    return ret;
-}
-
-static inline int sys_munmap(void *addr, size_t length) {
-    long ret;
-
-    __asm__ volatile (
-        "syscall"
-        : "=a"(ret)
-        : "a"(11), "D"(addr), "S"(length)
-        : "rcx", "r11", "memory"
-    );
-
-    return (int)ret;
 }
 
 static int sys_memcmp(const void *s1, const void *s2, size_t n) {
