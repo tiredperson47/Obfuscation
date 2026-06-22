@@ -1,0 +1,36 @@
+#include <stddef.h>
+
+static void *sys_memcpy(void *dest, const void *src, size_t n) {
+    unsigned char *d = dest;
+    const unsigned char *s = src;
+
+    for (size_t i = 0; i < n; i++) {
+        d[i] = s[i];
+    }
+
+    return dest;
+}
+
+// static void *sys_memset(void *s, int c, size_t n) {
+//     unsigned char *p = s;
+//     while (n--) *p++ = (unsigned char)c;
+//     return s;
+// }
+
+static int sys_memcmp(const void *s1, const void *s2, size_t n) {
+    const unsigned char *a = s1, *b = s2;
+    for (size_t i = 0; i < n; i++) {
+        if (a[i] != b[i]) return a[i] - b[i];
+    }
+    return 0;
+}
+
+// static long syscall_api(long n, long a0, long a1, long a2) {
+//     register long x0 asm("x0") = a0;
+//     register long x1 asm("x1") = a1;
+//     register long x2 asm("x2") = a2;
+//     register long x8 asm("x8") = n;
+
+//     asm volatile("svc #0" : "+r"(x0) : "r"(x1), "r"(x2), "r"(x8) : "memory");
+//     return x0;
+// }

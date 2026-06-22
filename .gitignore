@@ -1,2 +1,4 @@
-loader*
+loader.bin
+loader.elf
+loader.o
 agent*

