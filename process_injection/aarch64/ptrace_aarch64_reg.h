@@ -191,27 +191,6 @@ static inline int write_payload(long pid, long address, const unsigned char *pay
     return 0;
 }
 
-// int restore_and_detach(pid_t pid, struct user_pt_regs *backup, uint64_t tls_backup) {
-//     ptrace(PTRACE_ATTACH, pid, NULL, NULL)
-//     // restore TLS first
-//     if (tls_backup != 0) {
-//         tls_iov.iov_base = &tls_backup;
-//         tls_iov.iov_len = sizeof(tls_backup);
-//         CHECK(ptrace(PTRACE_SETREGSET, pid, NT_ARM_TLS, &tls_iov));
-//     }
-
-//     // restore GP registers from backup
-//     struct iovec restore_iov;
-//     restore_iov.iov_base = &backup;
-//     restore_iov.iov_len = sizeof(backup);
-//     CHECK(ptrace(PTRACE_SETREGSET, pid, NT_PRSTATUS, &restore_iov));
-
-//     // detach -- process resumes at backup.pc
-//     CHECK(ptrace(PTRACE_DETACH, pid, NULL, NULL));
-//     // printf("[*] Detached, process restored to PC: 0x%llx\n", backup.pc);
-//     return 0;
-// }
-
 static inline uint64_t align_down(uint64_t x, uint64_t a) {
     return x & ~(a - 1);
 }

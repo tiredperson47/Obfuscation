@@ -3,6 +3,7 @@
 #include <sys/user.h>
 #include <time.h>
 #include <stdint.h>
+#include "param_struct_aarch64.h"
 
 static long syscall_api(long n, long a0, long a1, long a2) {
     register long x0 asm("x0") = a0;
@@ -13,25 +14,6 @@ static long syscall_api(long n, long a0, long a1, long a2) {
     asm volatile("svc #0" : "+r"(x0) : "r"(x1), "r"(x2), "r"(x8) : "memory");
     return x0;
 }
-
-struct cleanup {
-    uint64_t x[31];       // x0-x30 from saved user_pt_regs.regs[]
-    uint64_t sp;
-    uint64_t pc;
-    uint64_t pstate;
-
-    uint64_t tpidr_el0;
-
-    uint8_t  sigmask[128];
-
-    uint64_t a_addr;
-    uint64_t a_size;
-    uint64_t b_addr;
-    uint64_t b_size;
-
-    uint64_t stub_dst;    // executable, 16-byte aligned
-    uint64_t page_size;
-} cleanup;
 
 static void print(const char *msg) {
     int len = 0;

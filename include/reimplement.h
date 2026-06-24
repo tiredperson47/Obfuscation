@@ -37,4 +37,15 @@ static inline void *sys_memset(void *dest, int c, size_t n) {
     return dest;
 }
 
+static inline int sys_strcmp(const char *s1, const char *s2) {
+    const unsigned char *a = (const unsigned char *)s1;
+    const unsigned char *b = (const unsigned char *)s2;
+
+    while (*a && (*a == *b)) {
+        a++;
+        b++;
+    }
+    return *a - *b;
+}
+
 #endif
