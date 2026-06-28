@@ -16,7 +16,7 @@ fi
 
 gcc -O3 -fPIE -pie -nostdlib -nostartfiles -fno-stack-protector -fno-builtin -Wl,-e,_start -I ../include -o agent ./$ARCH/payload-example-"$ARCH".c
     
-# Setup
+# Compile for ptrace reg process injection + shelf
 sed -i "s/^\(#define PID \).*/\1$PID/" ../process_injection/$ARCH/"$ARCH"_reg.c
 sed -i '17i #include "loader.h"' ../process_injection/$ARCH/"$ARCH"_reg.c
 sed -i "3i #include \"param_struct_${ARCH}.h\"" loader.h

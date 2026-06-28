@@ -1,19 +1,17 @@
 #define _GNU_SOURCE
-#include <sys/ptrace.h>
 #include <asm/ptrace.h>
-#include <sys/wait.h>
+#include <elf.h>
+#include <errno.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/mman.h>
-#include <sys/syscall.h>
-#include <elf.h>
+#include <sys/ptrace.h>
+#include <sys/types.h>
 #include <sys/uio.h>
-#include <stdint.h>
-#include <errno.h>
-#include <signal.h>
+#include <sys/wait.h>
 #include <unistd.h>
-#include "param_struct_aarch64.h"
+
 #define PID 1234
 #define CHECK(x) if ((x) == -1) { perror(#x); exit(1); }
 #define NT_ARM_TLS 0x401 // Ptrace flag for AArch64 TLS register
@@ -38,7 +36,6 @@ int main() {
     int status;
 
     if (ptrace(PTRACE_ATTACH, pid, NULL, NULL) == -1) {
-        // perror("ptrace attach");
         return EXIT_FAILURE;
     }
 
@@ -46,7 +43,7 @@ int main() {
         return EXIT_FAILURE;
     }
 
-    struct user_regs_struct regs, backup = {0};
+    struct user_pt_regs regs, backup = {0};
 
     struct iovec iov = {
         .iov_base = &backup,
@@ -61,15 +58,10 @@ int main() {
     struct iovec tls_iov;
     tls_iov.iov_base = &tls_backup;
     tls_iov.iov_len = sizeof(tls_backup);
-    if (ptrace(PTRACE_GETREGSET, pid, NT_ARM_TLS, &tls_iov) == -1) {
-        // perror("[-] Failed to backup TLS (Non-fatal)");
-    }
+    ptrace(PTRACE_GETREGSET, pid, NT_ARM_TLS, &tls_iov);
 
-    // printf("[*] PC at attach: 0x%llx\n", (unsigned long long)regs.pc);
-    // printf("[*] Checking if PC page is writable...\n");
 
     unsigned long syscall_pc = backup.pc;
-
 
     struct loader_params params;
     params.pid = pid;

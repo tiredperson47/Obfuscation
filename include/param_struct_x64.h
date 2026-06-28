@@ -1,7 +1,8 @@
-#pragma once
+#ifndef PARAM_STRUCT_X64_H
+#define PARAM_STRUCT_X64_H
+
 #include <sys/ptrace.h>
 #include <sys/uio.h>
-#include <stdint.h>
 #include <stdint.h>
 #include <sys/user.h>
 
@@ -31,3 +32,5 @@ struct loader_params {
     struct user_regs_struct backup;
     uint64_t fs_backup;
 };
+
+#endif // PARAM_STRUCT_X64_H
