@@ -21,10 +21,7 @@
 typedef struct {
     ElfN_Addr  vaddr;
     ElfN_Xword memsz;
-    ElfN_Xword filesz;
-    ElfN_Off   offset;
     ElfN_Xword  flags;
-    ElfN_Xword align;
 } load_segment;
 
 int is_image_valid(ElfN_Ehdr *hdr) {
@@ -52,9 +49,9 @@ int *load_image(struct loader_params *params) {
         if (phdr[i].p_type == PT_LOAD) {
             if (seg_count >= MAX_SEGMENTS) return 0;
             segments[seg_count++] = (load_segment) {
-                .vaddr = phdr[i].p_vaddr, .memsz = phdr[i].p_memsz,
-                .filesz = phdr[i].p_filesz, .offset = phdr[i].p_offset,
-                .flags = phdr[i].p_flags, .align = phdr[i].p_align
+                .vaddr = phdr[i].p_vaddr,
+                .memsz = phdr[i].p_memsz,
+                .flags = phdr[i].p_flags,
             };
             if (phdr[i].p_vaddr < min_vaddr) min_vaddr = phdr[i].p_vaddr;
             if ((phdr[i].p_vaddr + phdr[i].p_memsz) > max_vaddr) max_vaddr = phdr[i].p_vaddr + phdr[i].p_memsz;
