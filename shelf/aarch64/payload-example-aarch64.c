@@ -6,33 +6,33 @@
 #include "cleanup.h"
 #include "param_struct_aarch64.h"
 
-// static long syscall_api(long n, long a0, long a1, long a2) {
-//     register long x0 asm("x0") = a0;
-//     register long x1 asm("x1") = a1;
-//     register long x2 asm("x2") = a2;
-//     register long x8 asm("x8") = n;
+static long syscall_api(long n, long a0, long a1, long a2) {
+    register long x0 asm("x0") = a0;
+    register long x1 asm("x1") = a1;
+    register long x2 asm("x2") = a2;
+    register long x8 asm("x8") = n;
 
-//     asm volatile("svc #0" : "+r"(x0) : "r"(x1), "r"(x2), "r"(x8) : "memory");
-//     return x0;
-// }
+    asm volatile("svc #0" : "+r"(x0) : "r"(x1), "r"(x2), "r"(x8) : "memory");
+    return x0;
+}
 
-// static void print(const char *msg) {
-//     int len = 0;
-//     while (msg[len]) len++;
-//     syscall_api(SYS_write, 2, (long)msg, len);
-// }
+static void print(const char *msg) {
+    int len = 0;
+    while (msg[len]) len++;
+    syscall_api(SYS_write, 2, (long)msg, len);
+}
 
-// static void print_int(int n) {
-//     char buf[12];
-//     int i = 10;
-//     buf[11] = '\0';
-//     if (n == 0) { syscall_api(SYS_write, 1, (long)"0", 1); return; }
-//     while (n > 0 && i >= 0) {
-//         buf[i--] = '0' + (n % 10);
-//         n /= 10;
-//     }
-//     syscall_api(SYS_write, 2, (long)&buf[i+1], 10 - i);
-// }
+static void print_int(int n) {
+    char buf[12];
+    int i = 10;
+    buf[11] = '\0';
+    if (n == 0) { syscall_api(SYS_write, 1, (long)"0", 1); return; }
+    while (n > 0 && i >= 0) {
+        buf[i--] = '0' + (n % 10);
+        n /= 10;
+    }
+    syscall_api(SYS_write, 2, (long)&buf[i+1], 10 - i);
+}
 
 static void sleep_s(int seconds) {
     struct timespec ts = {seconds, 0};
