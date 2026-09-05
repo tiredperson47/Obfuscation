@@ -21,7 +21,6 @@
 #define SC_PC          (UC_MCONTEXT + 0x108)
 #define SC_PSTATE      (UC_MCONTEXT + 0x110)
 #define SC_RESERVED    (UC_MCONTEXT + 0x120)
-#define FPSIMD_MAGIC        0x46508001u
 #define FPSIMD_CONTEXT_SIZE 0x210u
 #define TERMINATOR_SIZE     0x10u
 #define RT_FRAME_SIZE       SC_RESERVED + FPSIMD_CONTEXT_SIZE + TERMINATOR_SIZE
@@ -38,45 +37,6 @@ typedef struct {
     uint64_t syscall_trampoline;
     uint64_t rt_sigreturn;
 } CleanupTargets;
-
-static long syscall_api(long n, long a0, long a1, long a2) {
-    register long x0 asm("x0") = a0;
-    register long x1 asm("x1") = a1;
-    register long x2 asm("x2") = a2;
-    register long x8 asm("x8") = n;
-
-    asm volatile("svc #0" : "+r"(x0) : "r"(x1), "r"(x2), "r"(x8) : "memory");
-    return x0;
-}
-
-static void print(const char *msg) {
-    int len = 0;
-    while (msg[len]) len++;
-    syscall_api(SYS_write, 2, (long)msg, len);
-}
-
-static void print_int(int n) {
-    char buf[12];
-    int i = 10;
-    buf[11] = '\0';
-    if (n == 0) { syscall_api(SYS_write, 1, (long)"0", 1); return; }
-    while (n > 0 && i >= 0) {
-        buf[i--] = '0' + (n % 10);
-        n /= 10;
-    }
-    syscall_api(SYS_write, 2, (long)&buf[i+1], 10 - i);
-}
-
-static void print_hex(uint64_t n) {
-    char buf[18];          // "0x" + 16 hex digits
-    const char *hex = "0123456789abcdef";
-    buf[0] = '0';
-    buf[1] = 'x';
-    for (int i = 0; i < 16; i++) {
-        buf[2 + i] = hex[(n >> (60 - i * 4)) & 0xf];
-    }
-    syscall_api(SYS_write, 2, (long)buf, 18);
-}
 
 static inline unsigned long sys_prctl(unsigned long a0, unsigned long a1, unsigned long a2) {
     register long x0 asm("x0") = a0;
@@ -149,16 +109,11 @@ static inline uint64_t scan_bytes(uint64_t scan_start, uint64_t scan_size, const
     return 0;
 }
 
-static inline uint64_t current_sp(void) {
-    uint64_t sp;
-    __asm__ volatile("mov %0, sp" : "=r"(sp));
-    return sp;
-}
-
 
 static inline void *rop_chain(struct cleanup *params) {
     CleanupTargets targets = {0};
     uint64_t libc_base = find_libc_base(params->pc);
+
     uint64_t vdso_base = find_vdso_base();
 
     // rop gadget in libc to perform munmap. Gadget found through ROPGadget tool.
@@ -189,8 +144,6 @@ static inline void *rop_chain(struct cleanup *params) {
     
     ExecRegion vdso = get_exec_region(vdso_base);
 
-    uint64_t cur_sp = current_sp();
-
     uint64_t frame_addr = (params->sp - 0x4000) & ~0xfULL;
 
     uint64_t mov_addr = scan_bytes(vdso.start, vdso.size, mov_x8_rt_sigreturn_svc, sizeof(mov_x8_rt_sigreturn_svc));
@@ -200,25 +153,6 @@ static inline void *rop_chain(struct cleanup *params) {
     } else {
         targets.rt_sigreturn = mov_addr;
     }
-
-    print("a_address: ");
-    print_hex(params->a_addr);
-    print("\n");
-    print("a_size: ");
-    print_hex(params->a_size);
-    print("\n");
-    print("current_sp: ");
-    print_hex(cur_sp);
-    print("\n");
-    print("frame_addr: ");
-    print_hex(frame_addr);
-    print("\n");
-    print("saved sp: ");
-    print_hex(params->sp);
-    print("\n");
-    print("rt_sigreturn: ");
-    print_hex(targets.rt_sigreturn);
-    print("\n");
 
     // build frame for rt_sigreturn
     uint8_t *f = (uint8_t *)frame_addr;
@@ -247,24 +181,25 @@ static inline void *rop_chain(struct cleanup *params) {
     *(uint32_t *)(f + SC_RESERVED + FPSIMD_CONTEXT_SIZE + 0x00) = 0;
     *(uint32_t *)(f + SC_RESERVED + FPSIMD_CONTEXT_SIZE + 0x04) = 0;
 
-    // volatile registers to hold values for rop chain
+    // registers used in rop chain
     register uint64_t r_frame  __asm__("x10") = frame_addr;
     register uint64_t r_tramp  __asm__("x11") = targets.syscall_trampoline;
     register uint64_t r_sigret __asm__("x12") = targets.rt_sigreturn;
     register uint64_t r_addr   __asm__("x13") = params->a_addr;
     register uint64_t r_size   __asm__("x14") = params->a_size;
+    register uint64_t r_tpidr __asm__("x15") = (uint64_t)params->tpidr_el0;
 
-    // rop chain to call munmap() then jump to libc to execute rt_sigreturn
     __asm__ volatile(
+        "msr tpidr_el0, x15\n"
         "mov sp, x10\n"
         "mov x9, x11\n"
         "mov x30, x12\n"
         "mov x2, x13\n"
         "mov x3, x14\n"
-        "mov x1, #215\n"
+        "mov x1, #172\n"
         "br x9\n"
         :
-        : "r"(r_frame), "r"(r_tramp), "r"(r_sigret), "r"(r_addr), "r"(r_size)
+        : "r"(r_frame), "r"(r_tramp), "r"(r_sigret), "r"(r_addr), "r"(r_size), "r"(r_tpidr)
         : "x1", "x2", "x3", "x9", "x30", "memory"
     );
 

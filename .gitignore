@@ -2,3 +2,4 @@ loader.bin
 loader.elf
 loader.o
 agent*
+payload.h

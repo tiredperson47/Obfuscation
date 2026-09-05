@@ -14,6 +14,7 @@ struct cleanup {
     uint8_t  sigmask[128];
     uint64_t a_addr;
     uint64_t a_size;
+    uint64_t loader_sp;
 };
 
 // Modify the struct as needed or add multiple structs for different functions
